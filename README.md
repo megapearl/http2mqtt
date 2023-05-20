@@ -1,8 +1,7 @@
 
 ## MQTT HTTP Bridge
 
-This script creates an HTTP server that acts as a bridge between HTTP requests and MQTT messages. It allows you to publish MQTT messages by sending HTTP requests with the desired topic and payload.
-Support for RETAIN and QOS to be set via environment variables.
+This script creates an HTTP server that acts as a bridge between HTTP requests and MQTT messages. It allows you to publish MQTT messages by sending HTTP GET or POST requests with the desired topic and payload.
 
 ### Prerequisites
 
