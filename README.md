@@ -23,12 +23,12 @@ Before running the script, make sure you have the following prerequisites instal
 
 The script uses environment variables for configuration. You can set the following environment variables or use the default values:
 
-- `MQTT_BROKER`: MQTT broker hostname or IP address. Default: `shed-mqtt.flissinger.com`
+- `MQTT_BROKER`: MQTT broker hostname or IP address. Default: `localhost`
 - `MQTT_PORT`: MQTT broker port. Default: `1883`
-- `TOPIC_PREFIX`: Prefix to be added to the MQTT topic. Default: `home-domotica/`
-- `MQTT_CLIENT_ID`: MQTT client ID. Default: `freebsd-fileserver`
-- `MQTT_USERNAME`: MQTT username. Default: `donald`
-- `MQTT_PASSWORD`: MQTT password. Default: `delta123`
+- `TOPIC_PREFIX`: Prefix to be added to the MQTT topic. Default: `http2mqtt/`
+- `MQTT_CLIENT_ID`: MQTT client ID. Default: `localhost`
+- `MQTT_USERNAME`: MQTT username. Default: `username`
+- `MQTT_PASSWORD`: MQTT password. Default: `password`
 - `MQTT_RETAIN`: MQTT retain flag (0 or 1). Default: `1`
 - `MQTT_QOS`: MQTT quality of service level (0, 1, or 2). Default: `1`
 - `HTTP_PORT`: HTTP server port. Default: `8080`
@@ -40,7 +40,7 @@ The script uses environment variables for configuration. You can set the followi
 To start the MQTT HTTP bridge, run the following command:
 
 ```bash
-python script.py
+python http2mqtt.py
 ```
 
 The HTTP server will start listening on the specified IP address and port. You can access the web interface by opening a web browser and navigating to `http://<IP_ADDRESS>:<HTTP_PORT>`. The default IP address is `0.0.0.0` (all interfaces) and the default port is `8080`.
