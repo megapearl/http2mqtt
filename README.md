@@ -86,6 +86,7 @@ Service is then available on `http://localhost:8080/`.
 | `MQTT_PASSWORD`     |                    | MQTT auth password (if required)     |
 | `MQTT_RETAIN`       | `1`                | Default retain flag (0 or 1)         |
 | `MQTT_QOS`          | `1`                | Default QoS level (0, 1, or 2)       |
+| `MQTT_PROTOCOL`     | `5`                | Default Protocol (defaults to 3.1.1  |
 | `HTTP_IP_ADDRESS`   | `0.0.0.0`          | HTTP server bind address             |
 | `HTTP_PORT`         | `8080`             | HTTP server port                     |
 | `HTTP_PAYLOAD_HEADER` | `x-payload`      | Header name to override payload      |

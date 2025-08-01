@@ -11,17 +11,17 @@ import socketserver
 import paho.mqtt.client as mqtt
 
 # Configuration from environment variables
-MQTT_BROKER       = os.environ.get("MQTT_BROKER", "localhost")
-MQTT_PORT         = int(os.environ.get("MQTT_PORT", "1883"))
-TOPIC_PREFIX      = os.environ.get("TOPIC_PREFIX", "http2mqtt/")
-MQTT_CLIENT_ID    = os.environ.get("MQTT_CLIENT_ID", "http2mqtt")
-MQTT_USERNAME     = os.environ.get("MQTT_USERNAME")
-MQTT_PASSWORD     = os.environ.get("MQTT_PASSWORD")
-MQTT_RETAIN       = bool(int(os.environ.get("MQTT_RETAIN", "1")))
-MQTT_QOS          = int(os.environ.get("MQTT_QOS", "1"))
-
-HTTP_IP_ADDRESS   = os.environ.get("HTTP_IP_ADDRESS", "0.0.0.0")
-HTTP_PORT         = int(os.environ.get("HTTP_PORT", "8080"))
+MQTT_BROKER         = os.environ.get("MQTT_BROKER", "localhost")
+MQTT_PORT           = int(os.environ.get("MQTT_PORT", "1883"))
+TOPIC_PREFIX        = os.environ.get("TOPIC_PREFIX", "http2mqtt/")
+MQTT_CLIENT_ID      = os.environ.get("MQTT_CLIENT_ID", "http2mqtt")
+MQTT_USERNAME       = os.environ.get("MQTT_USERNAME")
+MQTT_PASSWORD       = os.environ.get("MQTT_PASSWORD")
+MQTT_RETAIN         = bool(int(os.environ.get("MQTT_RETAIN", "1")))
+MQTT_QOS            = int(os.environ.get("MQTT_QOS", "1"))
+MQTT_PROTOCOL       = os.environ.get("MQTT_PROTOCOL", "3.1.1")
+HTTP_IP_ADDRESS     = os.environ.get("HTTP_IP_ADDRESS", "0.0.0.0")
+HTTP_PORT           = int(os.environ.get("HTTP_PORT", "8080"))
 HTTP_PAYLOAD_HEADER = os.environ.get("HTTP_PAYLOAD_HEADER", "x-payload")
 
 # Logging setup
@@ -32,8 +32,20 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Determine MQTT protocol version constant
+_proto = MQTT_PROTOCOL.strip().lower()
+if _proto in ("5", "5.0", "v5", "mqttv5"):
+    MQTT_PROTOCOL = mqtt.MQTTv5
+elif _proto in ("3.1", "3.10", "v3.1", "mqttv31"):
+    MQTT_PROTOCOL = mqtt.MQTTv31
+else:
+    # default to 3.1.1
+    MQTT_PROTOCOL = mqtt.MQTTv311
+
+logger.info("Using MQTT protocol version: %s", MQTT_PROTOCOL)
+
 # Initialize persistent MQTT client
-mqtt_client = mqtt.Client(client_id=MQTT_CLIENT_ID)
+mqtt_client = mqtt.Client(client_id=MQTT_CLIENT_ID, protocol=MQTT_PROTOCOL)
 if MQTT_USERNAME and MQTT_PASSWORD:
     mqtt_client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
 mqtt_client.connect(MQTT_BROKER, MQTT_PORT)
@@ -59,26 +71,32 @@ class HTTPHandler(http.server.BaseHTTPRequestHandler):
             self.send_header(k, v)
         if 'Content-Length' not in headers:
             self.send_header('Content-Length', str(len(body)))
-        self.end_headers()
+        # End headers, ignore client disconnects
+        try:
+            self.end_headers()
+        except ConnectionResetError:
+            return
+        # Write body if present, ignore client disconnects
         if body:
-            self.wfile.write(body)
+            try:
+                self.wfile.write(body)
+            except ConnectionResetError:
+                pass
 
     def _set_error(self, status, message):
         payload = json.dumps({"error": message}).encode('utf-8')
-        self._set_response(status, {
-            'Content-Type': 'application/json'
-        }, payload)
+        self._set_response(status, {'Content-Type': 'application/json'}, payload)
 
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
         qs = urllib.parse.parse_qs(parsed.query)
 
-        # Publish if proper query parameters
+        # 1) Publish if proper query parameters
         if 'topic' in qs and 'payload' in qs:
-            topic   = qs['topic'][0]
+            topic = qs['topic'][0]
             payload = qs['payload'][0]
             try:
-                qos    = int(qs.get('qos', [str(MQTT_QOS)])[0])
+                qos = int(qs.get('qos', [str(MQTT_QOS)])[0])
                 retain = bool(int(qs.get('retain', [str(int(MQTT_RETAIN))])[0]))
             except ValueError:
                 qos, retain = MQTT_QOS, MQTT_RETAIN
@@ -97,14 +115,13 @@ class HTTPHandler(http.server.BaseHTTPRequestHandler):
             except Exception as e:
                 self._set_error(500, str(e))
 
-        # Favicon handler to reduce noise
+        # 2) Favicon => no content
         elif parsed.path == '/favicon.ico':
             self._set_response(204)
 
-        # Serve web interface
+        # 3) Web UI form
         elif parsed.path == '/':
-            html = f"""
-<!DOCTYPE html>
+            html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -135,11 +152,11 @@ class HTTPHandler(http.server.BaseHTTPRequestHandler):
     </form>
   </div>
 </body>
-</html>
-"""
+</html>"""
             body = html.encode('utf-8')
             self._set_response(200, {'Content-Type': 'text/html'}, body)
 
+        # 4) Anything else
         else:
             self._set_error(400, 'Bad request')
 
@@ -147,6 +164,7 @@ class HTTPHandler(http.server.BaseHTTPRequestHandler):
         length = int(self.headers.get('Content-Length', 0))
         raw = self.rfile.read(length).decode('utf-8')
         data = urllib.parse.parse_qs(raw)
+
         topic   = data.get('topic', [''])[0]
         payload = data.get('payload', [''])[0]
         try:
@@ -172,7 +190,6 @@ class HTTPHandler(http.server.BaseHTTPRequestHandler):
         except Exception as e:
             self._set_error(500, str(e))
 
-
 class ThreadedHTTPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     daemon_threads = True
 
@@ -187,7 +204,7 @@ def run():
         mqtt_client.disconnect()
         sys.exit(0)
 
-    signal.signal(signal.SIGINT,  shutdown_handler)
+    signal.signal(signal.SIGINT, shutdown_handler)
     signal.signal(signal.SIGTERM, shutdown_handler)
     server.serve_forever()
 
