@@ -1,54 +1,133 @@
+# HTTP → MQTT Bridge
 
-## MQTT HTTP Bridge
+A lightweight bridge that exposes an HTTP interface to publish messages to an MQTT broker. Suitable for IoT integrations, webhooks, or simple testing.
 
-This script creates an HTTP server that acts as a bridge between HTTP requests and MQTT messages. It allows you to publish MQTT messages by sending HTTP GET or POST requests with the desired topic and payload.
+---
+
+## 🚀 Features
+
+- **HTTP GET/POST** endpoints for publishing MQTT messages
+- **Configurable** via environment variables
+- **Persistent MQTT client** for performance
+- **Threaded HTTP server** for concurrent requests
+- **Docker-ready** with optimized multi-stage build
+- **Health checks** and structured logging
+
+---
+
+## 🛠️ Installation
 
 ### Prerequisites
 
-Before running the script, make sure you have the following prerequisites installed:
+- Python **3.8+**
+- Docker & Docker Compose (optional)
 
-- Python 3.x
-- Paho MQTT library (`paho-mqtt`)
+### From Source
 
-### Installation
-
-1. Clone the repository or download the script file.
-2. Install the required dependencies by running the following command:
-
+1. **Clone** this repo:
    ```bash
-   pip install paho-mqtt
+   git clone https://github.com/your-org/http2mqtt.git
+   cd http2mqtt
    ```
 
-### Configuration
+2. **Install dependencies**:
+   ```bash
+   pip install --upgrade pip
+   pip install -r requirements.txt
+   ```
 
-The script uses environment variables for configuration. You can set the following environment variables or use the default values:
-
-- `MQTT_BROKER`: MQTT broker hostname or IP address. Default: `localhost`
-- `MQTT_PORT`: MQTT broker port. Default: `1883`
-- `TOPIC_PREFIX`: Prefix to be added to the MQTT topic. Default: `http2mqtt/`
-- `MQTT_CLIENT_ID`: MQTT client ID. Default: `localhost`
-- `MQTT_USERNAME`: MQTT username. Default: `username`
-- `MQTT_PASSWORD`: MQTT password. Default: `password`
-- `MQTT_RETAIN`: MQTT retain flag (0 or 1). Default: `1`
-- `MQTT_QOS`: MQTT quality of service level (0, 1, or 2). Default: `1`
-- `HTTP_PORT`: HTTP server port. Default: `8080`
-- `HTTP_PAYLOAD_HEADER`: HTTP request header field to specify the payload. Default: `x-payload`
-- `HTTP_IP_ADDRESS`: IP address for the HTTP server to bind to. Default: `0.0.0.0`
-
-### Usage
-
-To start the MQTT HTTP bridge, run the following command:
-
-```bash
-python http2mqtt.py
-```
-
-The HTTP server will start listening on the specified IP address and port. You can access the web interface by opening a web browser and navigating to `http://<IP_ADDRESS>:<HTTP_PORT>`. The default IP address is `0.0.0.0` (all interfaces) and the default port is `8080`.
-
-The web interface allows you to publish MQTT messages by submitting a form with the desired topic, payload, QoS, and retain settings.
-
-### License
-
-This script is licensed under the [MIT License](LICENSE).
+3. **Run**:
+   ```bash
+   python optimized_http2mqtt.py
+   ```
 
 ---
+
+## 🐳 Docker
+
+### Build & Run
+
+```bash
+# Build image
+docker build -t http2mqtt .
+
+# Run container
+docker run -d \
+  --name http2mqtt \
+  -p 8088:8080 \
+  -e MQTT_BROKER=broker.local \
+  -e MQTT_PORT=1883 \
+  -e TOPIC_PREFIX=http2mqtt/ \
+  http2mqtt:latest
+```
+
+### Docker Compose
+
+```bash
+# Start services
+docker-compose up -d
+# Stop
+docker-compose down
+```
+
+Service is then available on `http://localhost:8088/`.
+
+---
+
+## ⚙️ Configuration
+
+| Variable            | Default            | Description                           |
+|---------------------|--------------------|---------------------------------------|
+| `MQTT_BROKER`       | `localhost`        | MQTT broker host or IP               |
+| `MQTT_PORT`         | `1883`             | MQTT broker port                     |
+| `TOPIC_PREFIX`      | `http2mqtt/`       | MQTT topic prefix                    |
+| `MQTT_CLIENT_ID`    | `http2mqtt`        | MQTT client identifier               |
+| `MQTT_USERNAME`     |                    | MQTT auth username (if required)     |
+| `MQTT_PASSWORD`     |                    | MQTT auth password (if required)     |
+| `MQTT_RETAIN`       | `1`                | Default retain flag (0 or 1)         |
+| `MQTT_QOS`          | `1`                | Default QoS level (0, 1, or 2)       |
+| `HTTP_IP_ADDRESS`   | `0.0.0.0`          | HTTP server bind address             |
+| `HTTP_PORT`         | `8080`             | HTTP server port                     |
+| `HTTP_PAYLOAD_HEADER` | `x-payload`      | Header name to override payload      |
+
+---
+
+## 📝 Usage
+
+- **Publish via GET**:
+  ```text
+  GET /my/topic?payload=hello
+  Header: x-payload: world   # optional override
+  ```
+- **Publish via POST**:
+  ```text
+  POST /publish
+  Content-Type: application/x-www-form-urlencoded
+  Body: topic=my/topic&payload=hello&qos=2&retain=1
+  ```
+
+The service responds with JSON:
+
+```json
+{
+  "topic": "http2mqtt/my/topic",
+  "payload": "hello",
+  "qos": 2,
+  "retain": true,
+  "result": { "success": true }
+}
+```
+
+---
+
+## 🔍 Health Check
+
+- **Endpoint**: `GET /` serves a simple form and returns HTTP 200.
+
+- **Docker Compose**: `healthcheck` command is defined to use `wget --spider`.
+
+---
+
+## 📜 License
+
+This project is licensed under the [MIT License](LICENSE). Feel free to use and adapt it!

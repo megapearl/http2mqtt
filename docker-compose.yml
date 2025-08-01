@@ -1,6 +1,32 @@
-version: '3'
+version: '3.8'
 services:
   http2mqtt:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: http2mqtt:latest
+    restart: unless-stopped
     ports:
-      - "8088:8080"
+      - '8080:8080'
+    environment:
+      MQTT_BROKER: "${MQTT_BROKER:-localhost}"
+      MQTT_PORT: "${MQTT_PORT:-1883}"
+      TOPIC_PREFIX: "${TOPIC_PREFIX:-http2mqtt/}"
+      MQTT_CLIENT_ID: "${MQTT_CLIENT_ID:-http2mqtt}"
+      MQTT_USERNAME: "${MQTT_USERNAME}"
+      MQTT_PASSWORD: "${MQTT_PASSWORD}"
+      MQTT_RETAIN: "${MQTT_RETAIN:-1}"
+      MQTT_QOS: "${MQTT_QOS:-1}"
+      HTTP_IP_ADDRESS: "${HTTP_IP_ADDRESS:-0.0.0.0}"
+      HTTP_PORT: "${HTTP_PORT:-8080}"
+      HTTP_PAYLOAD_HEADER: "${HTTP_PAYLOAD_HEADER:-x-payload}"
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "http://localhost:8080/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

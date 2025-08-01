@@ -6,6 +6,7 @@ __pycache__/
 .env
 .git
 .gitignore
+.dockerignore
 .vscode/
 *.db
 *.sqlite
