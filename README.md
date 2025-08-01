@@ -26,7 +26,7 @@ A lightweight bridge that exposes an HTTP interface to publish messages to an MQ
 
 1. **Clone** this repo:
    ```bash
-   git clone https://github.com/your-org/http2mqtt.git
+   git clone https://github.com/megapearl/http2mqtt.git
    cd http2mqtt
    ```
 
