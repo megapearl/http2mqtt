@@ -54,8 +54,8 @@ docker build -t http2mqtt .
 # Run container
 docker run -d \
   --name http2mqtt \
-  -p 8088:8080 \
-  -e MQTT_BROKER=broker.local \
+  -p 8080:8080 \
+  -e MQTT_BROKER=yourmqttbroker.local \
   -e MQTT_PORT=1883 \
   -e TOPIC_PREFIX=http2mqtt/ \
   http2mqtt:latest
@@ -70,7 +70,7 @@ docker-compose up -d
 docker-compose down
 ```
 
-Service is then available on `http://localhost:8088/`.
+Service is then available on `http://localhost:8080/`.
 
 ---
 
