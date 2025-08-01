@@ -38,7 +38,7 @@ A lightweight bridge that exposes an HTTP interface to publish messages to an MQ
 
 3. **Run**:
    ```bash
-   python optimized_http2mqtt.py
+   python http2mqtt.py
    ```
 
 ---
