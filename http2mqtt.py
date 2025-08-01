@@ -1,131 +1,151 @@
+#!/usr/bin/env python3
+import os
+import sys
+import signal
+import logging
+import json
+import urllib.parse
 import http.server
 import socketserver
-import urllib.parse
+
 import paho.mqtt.client as mqtt
-import json
-import os
 
+# Configuration
+MQTT_BROKER = os.environ.get("MQTT_BROKER", "localhost")
+MQTT_PORT = int(os.environ.get("MQTT_PORT", "1883"))
+TOPIC_PREFIX = os.environ.get("TOPIC_PREFIX", "http2mqtt/")
+MQTT_CLIENT_ID = os.environ.get("MQTT_CLIENT_ID", "http2mqtt")
+MQTT_USERNAME = os.environ.get("MQTT_USERNAME")
+MQTT_PASSWORD = os.environ.get("MQTT_PASSWORD")
+MQTT_RETAIN = bool(int(os.environ.get("MQTT_RETAIN", "1")))
+MQTT_QOS = int(os.environ.get("MQTT_QOS", "1"))
 
-# Parse environment variables or set default values
-MQTT_BROKER = os.environ.get('MQTT_BROKER', 'localhost')
-MQTT_PORT = int(os.environ.get('MQTT_PORT', '1883'))
-TOPIC_PREFIX = os.environ.get('TOPIC_PREFIX', 'http2mqtt/')
-MQTT_CLIENT_ID = os.environ.get('MQTT_CLIENT_ID', 'http2mqtt')
-MQTT_USERNAME = os.environ.get('MQTT_USERNAME', 'username')
-MQTT_PASSWORD = os.environ.get('MQTT_PASSWORD', 'password')
-MQTT_RETAIN = int(os.environ.get('MQTT_RETAIN', '1'))
-MQTT_QOS = int(os.environ.get('MQTT_QOS', '1'))
-HTTP_PORT = int(os.environ.get('HTTP_PORT', '8080'))
-HTTP_PAYLOAD_HEADER = os.environ.get('HTTP_PAYLOAD_HEADER', 'x-payload')
-HTTP_IP_ADDRESS = os.environ.get('HTTP_IP_ADDRESS', '0.0.0.0')
+HTTP_IP_ADDRESS = os.environ.get("HTTP_IP_ADDRESS", "0.0.0.0")
+HTTP_PORT = int(os.environ.get("HTTP_PORT", "8080"))
+HTTP_PAYLOAD_HEADER = os.environ.get("HTTP_PAYLOAD_HEADER", "x-payload")
 
+# Logging setup
+logging.basicConfig(level=logging.INFO,
+                    format="%(asctime)s [%(levelname)s] %(message)s")
+logger = logging.getLogger(__name__)
 
-class IncomingHTTPRequest(http.server.BaseHTTPRequestHandler):
-    def _set_response(self, status_code=200, headers=None, data=None):
-        self.send_response(status_code)
-        if headers:
-            for header, value in headers.items():
-                self.send_header(header, value)
+# Initialize and start MQTT client
+mqtt_client = mqtt.Client(client_id=MQTT_CLIENT_ID)
+if MQTT_USERNAME and MQTT_PASSWORD:
+    mqtt_client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
+mqtt_client.connect(MQTT_BROKER, MQTT_PORT)
+mqtt_client.loop_start()
+
+def publish_message(topic: str, payload: str, qos: int = MQTT_QOS, retain: bool = MQTT_RETAIN) -> bool:
+    """
+    Publish a message to the MQTT broker with the configured prefix.
+    """
+    full_topic = f"{TOPIC_PREFIX}{topic.lstrip('/')}"
+    result = mqtt_client.publish(full_topic, payload, qos=qos, retain=retain)
+    if result.rc == mqtt.MQTT_ERR_SUCCESS:
+        logger.info("Published to %s: %s", full_topic, payload)
+        return True
+    else:
+        logger.error("Publish failed (rc=%s) for topic %s", result.rc, full_topic)
+        return False
+
+class HTTPHandler(http.server.BaseHTTPRequestHandler):
+    def _respond(self, status: int = 200, content_type: str = "text/html", body: bytes = b""):
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
         self.end_headers()
+        self.wfile.write(body)
 
-        response_html = """
-        <html>
-        <body>
-            <div id="response-data"></div>
-        </body>
-        </html>
-        """
-        self.wfile.write(response_html.encode('utf-8'))
+    def _error(self, status: int, message: str):
+        payload = json.dumps({"error": message}).encode('utf-8')
+        self._respond(status, "application/json", payload)
 
-    def _set_error_response(self, status_code, error_message):
-        self.send_response(status_code)
-        self.send_header("Content-type", "application/json")
-        self.end_headers()
-
-        response_data = {
-            "error": error_message
-        }
-        response_data_json = json.dumps(response_data, indent=4)
-        self.wfile.write(response_data_json.encode("utf-8"))
+    def _render_form(self) -> bytes:
+        html = f"""
+<html>
+<body>
+    <h1>MQTT Publish Interface</h1>
+    <p>Topic Prefix: <code>{TOPIC_PREFIX}</code></p>
+    <form method="post" action="/publish">
+        <label>Topic:<input type="text" name="topic" required></label><br>
+        <label>Payload:<input type="text" name="payload" required></label><br>
+        <label>QoS:<input type="number" name="qos" value="{MQTT_QOS}" min="0" max="2"></label><br>
+        <label>Retain:<input type="checkbox" name="retain" {'checked' if MQTT_RETAIN else ''}></label><br>
+        <button type="submit">Publish</button>
+    </form>
+</body>
+</html>
+"""
+        return html.encode('utf-8')
 
     def do_GET(self):
-        if self.path == '/':
-            self._set_response()
-            topic_prefix_html = f'<p>Topic Prefix: {TOPIC_PREFIX}</p>'
-            form_html = b'<html><body><form method="POST" action="/publish"><label for="topic">Topic:</label><br><input type="text" id="topic" name="topic" required><br><label for="payload">Payload:</label><br><input type="text" id="payload" name="payload" required><br><label for="qos">QoS:</label><br><input type="number" id="qos" name="qos" min="0" max="2" value="1" required><br><label for="retain">Retain:</label><br><input type="number" id="retain" name="retain" min="0" max="1" value="1" required><br><input type="submit" value="Publish"></form></body></html>'
-            self.wfile.write(topic_prefix_html.encode('utf-8') + form_html)
-        else:
-            parsed_url = urllib.parse.urlparse(self.path)
-            topic = parsed_url.path[1:].lstrip('/')
-            payload = self.headers.get(HTTP_PAYLOAD_HEADER, '') or parsed_url.query
-            if topic and payload:
-                self.publish_message(topic, payload)
-                response_data = {
-                    "topic": TOPIC_PREFIX + topic,
-                    "payload": payload,
-                    "retain": MQTT_RETAIN,
-                    "qos": MQTT_QOS,
-                    "result": {"success": True}
-                }
-                self._set_response()
-                response_data_html = '<pre>' + json.dumps(response_data, indent=4) + '</pre>'
-                self.wfile.write(response_data_html.encode('utf-8'))
-            else:
-                self._set_response(400)
-                self.wfile.write(b'Both topic and payload are required.')
+        parsed = urllib.parse.urlparse(self.path)
+        if parsed.path == '/':
+            self._respond(body=self._render_form())
+            return
+
+        topic = parsed.path.lstrip('/')
+        payload = self.headers.get(HTTP_PAYLOAD_HEADER) or parsed.query
+        if not topic or not payload:
+            return self._error(400, "Both topic and payload are required.")
+
+        if not publish_message(topic, payload):
+            return self._error(500, "Failed to publish message.")
+
+        response = {
+            "topic": TOPIC_PREFIX + topic,
+            "payload": payload,
+            "qos": MQTT_QOS,
+            "retain": MQTT_RETAIN,
+            "result": {"success": True}
+        }
+        body = json.dumps(response, indent=4).encode('utf-8')
+        self._respond(200, "application/json", body)
 
     def do_POST(self):
-        content_length = int(self.headers['Content-Length'])
-        post_data = self.rfile.read(content_length).decode('utf-8')
-        parsed_data = urllib.parse.parse_qs(post_data)
-        topic = parsed_data.get('topic', [''])[0].lstrip('/')  # Remove the leading '/'
-        payload = parsed_data.get('payload', [''])[0]
-        qos = int(parsed_data.get('qos', ['1'])[0])
-        retain = int(parsed_data.get('retain', ['1'])[0])
-
-        if topic and payload:
-            self.publish_message(topic, payload, qos, retain)
-            response_data = {
-                "topic": TOPIC_PREFIX + topic,
-                "payload": payload,
-                "retain": retain,
-                "qos": qos,
-                "result": {"success": True}
-            }
-            self._set_response()
-            response_data_html = '<pre>' + json.dumps(response_data, indent=4) + '</pre>'
-            self.wfile.write(response_data_html.encode('utf-8'))
-        else:
-            self._set_response(400)
-            self.wfile.write(b'Both topic and payload are required.')
-
-    def publish_message(self, topic, payload, qos=1, retain=1):
+        length = int(self.headers.get('Content-Length', 0))
+        raw = self.rfile.read(length).decode('utf-8')
+        data = urllib.parse.parse_qs(raw)
+        topic = data.get('topic', [''])[0]
+        payload = data.get('payload', [''])[0]
         try:
-            prefixed_topic = TOPIC_PREFIX + topic
+            qos = int(data.get('qos', [MQTT_QOS])[0])
+        except ValueError:
+            qos = MQTT_QOS
+        retain = 'retain' in data
 
-            def on_publish(client, userdata, mid):
-                print(f"Message published to topic: {prefixed_topic}")
+        if not topic or not payload:
+            return self._error(400, "Both topic and payload are required.")
 
-            client = mqtt.Client(client_id=MQTT_CLIENT_ID)
-            client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
-            client.connect(MQTT_BROKER, MQTT_PORT)
+        if not publish_message(topic, payload, qos, retain):
+            return self._error(500, "Failed to publish message.")
 
-            client.on_publish = on_publish
+        response = {
+            "topic": TOPIC_PREFIX + topic,
+            "payload": payload,
+            "qos": qos,
+            "retain": retain,
+            "result": {"success": True}
+        }
+        body = json.dumps(response, indent=4).encode('utf-8')
+        self._respond(200, "application/json", body)
 
-            client.loop_start()
-            client.publish(prefixed_topic, payload, qos=qos, retain=retain)
-            client.loop_stop()
-            client.disconnect()
-        except Exception as e:
-            print(f"Error occurred while publishing message: {str(e)}")
-            self._set_error_response(500, "Internal Server Error")
 
+def run():
+    server = socketserver.ThreadingTCPServer((HTTP_IP_ADDRESS, HTTP_PORT), HTTPHandler)
+    logger.info("Starting server at %s:%s", HTTP_IP_ADDRESS, HTTP_PORT)
 
-class ThreadedHTTPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
-    pass
+    def _shutdown(signum, frame):
+        logger.info("Shutting down...")
+        server.shutdown()
+        mqtt_client.loop_stop()
+        mqtt_client.disconnect()
+        sys.exit(0)
 
+    signal.signal(signal.SIGINT, _shutdown)
+    signal.signal(signal.SIGTERM, _shutdown)
+    server.serve_forever()
 
 if __name__ == "__main__":
-    with ThreadedHTTPServer((HTTP_IP_ADDRESS, HTTP_PORT), IncomingHTTPRequest) as httpd:
-        print(f'HTTP server is running on {HTTP_IP_ADDRESS}:{HTTP_PORT}')
-        httpd.serve_forever()
+    run()
