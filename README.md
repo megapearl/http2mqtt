@@ -10,8 +10,9 @@ Perfect for IoT integrations, webhooks, SIP phones, or simple testing.
 - **REST API** for clean integrations (`/v1/messages`, `/v1/topics/{topic}/messages`)
 - **Legacy GET fallback** for devices that cannot send POST (e.g. SIP phones)
 - **HTML Web UI** at `/` with a simple publish form and live feedback
-- **Configurable** via environment variables
-- **Persistent MQTT client** for performance
+- **Built-in security headers** (CSP, X-Content-Type-Options, Referrer-Policy, X-Frame-Options)
+- **Configurable maximum topic/payload length** for safety
+- **Persistent MQTT client** with reconnect backoff for resilience
 - **Threaded HTTP server** for concurrent requests
 - **Health & config endpoints** for monitoring
 - **Optional API key & idempotency support**
@@ -48,13 +49,7 @@ python http2mqtt.py
 docker build -t http2mqtt .
 
 # Run container
-docker run -d \
-  --name http2mqtt \
-  -p 8080:8080 \
-  -e MQTT_BROKER=yourmqttbroker.local \
-  -e MQTT_PORT=1883 \
-  -e TOPIC_PREFIX=http2mqtt/ \
-  http2mqtt:latest
+docker run -d   --name http2mqtt   -p 8080:8080   -e MQTT_BROKER=yourmqttbroker.local   -e MQTT_PORT=1883   -e TOPIC_PREFIX=http2mqtt/   http2mqtt:latest
 ```
 
 ### Docker Compose
@@ -86,6 +81,30 @@ Service is then available on `http://localhost:8080/`.
 | `HTTP_PORT`           | `8080`          | HTTP server port                           |
 | `HTTP_PAYLOAD_HEADER` | `x-payload`     | Header name to override payload            |
 | `API_KEY`             | *(empty)*       | Optional API key for auth (`X-API-Key`)    |
+| `MAX_TOPIC_LEN`       | `512`           | Maximum allowed topic length (characters)  |
+| `MAX_PAYLOAD_LEN`     | `4096`          | Maximum allowed payload length (characters)|
+
+---
+
+## 🔐 Authentication
+
+If `API_KEY` is set, requests must authenticate.
+
+- **Preferred (modern clients):** send header `X-API-Key: <value>`.
+- **Legacy GET fallback (only for `/v1/messages` GET):** append `&apikey=<value>` to the URL.  
+  This is accepted **only** when `API_KEY` is configured and **only** on the GET endpoint to support old devices that cannot set headers.
+
+> ⚠️ Use HTTPS. Query-string API keys can appear in logs or referrers.
+
+Examples:
+
+```text
+GET /v1/messages?topic=frontdoor-voip&payload=ip_changed&apikey=SECRET123
+```
+
+```bash
+curl -X POST http://localhost:8080/v1/messages   -H 'Content-Type: application/json'   -H 'X-API-Key: SECRET123'   -d '{"topic":"frontdoor-voip","payload":"ip_changed"}'
+```
 
 ---
 
@@ -135,7 +154,7 @@ GET /v1/config
 ### 2. Legacy GET (for SIP phones or limited clients)
 
 ```text
-GET /v1/messages?topic=frontdoor-voip&payload=ip_changed&qos=1&retain=0
+GET /v1/messages?topic=frontdoor-voip&payload=ip_changed&qos=1&retain=0[&apikey=SECRET]
 ```
 
 ---
@@ -154,19 +173,13 @@ You get a simple form to publish MQTT messages and see success/failure in-page.
 
 ## 🔑 Optional Features
 
-- **API Key**  
-  If `API_KEY` is set, all requests must send `X-API-Key: <value>`.
-
 - **Idempotency**  
   Add header `Idempotency-Key: <uuid>` to `POST /v1/messages` to avoid duplicate publishes.
 
 - **Payload override via header**  
   You can override the payload with the `x-payload` header:
   ```bash
-  curl -X POST http://localhost:8080/v1/messages \
-    -H 'Content-Type: application/x-www-form-urlencoded' \
-    -H 'x-payload: my_payload' \
-    -d 'topic=test/topic'
+  curl -X POST http://localhost:8080/v1/messages     -H 'Content-Type: application/x-www-form-urlencoded'     -H 'x-payload: my_payload'     -d 'topic=test/topic'
   ```
 
 ---

@@ -14,19 +14,23 @@ import paho.mqtt.client as mqtt
 # =========================
 # Configuration (env vars)
 # =========================
-MQTT_BROKER         = os.environ.get("MQTT_BROKER", "localhost")
-MQTT_PORT           = int(os.environ.get("MQTT_PORT", "1883"))
-TOPIC_PREFIX        = os.environ.get("TOPIC_PREFIX", "http2mqtt/")
-MQTT_CLIENT_ID      = os.environ.get("MQTT_CLIENT_ID", "http2mqtt")
-MQTT_USERNAME       = os.environ.get("MQTT_USERNAME")
-MQTT_PASSWORD       = os.environ.get("MQTT_PASSWORD")
-MQTT_RETAIN         = bool(int(os.environ.get("MQTT_RETAIN", "1")))
-MQTT_QOS            = int(os.environ.get("MQTT_QOS", "1"))
-MQTT_PROTOCOL       = os.environ.get("MQTT_PROTOCOL", "3.1.1")
-HTTP_IP_ADDRESS     = os.environ.get("HTTP_IP_ADDRESS", "0.0.0.0")
-HTTP_PORT           = int(os.environ.get("HTTP_PORT", "8080"))
-HTTP_PAYLOAD_HEADER = os.environ.get("HTTP_PAYLOAD_HEADER", "x-payload")
-API_KEY             = os.environ.get("API_KEY")  # optional; if set, require X-API-Key
+MQTT_BROKER          = os.environ.get("MQTT_BROKER", "localhost")
+MQTT_PORT            = int(os.environ.get("MQTT_PORT", "1883"))
+TOPIC_PREFIX         = os.environ.get("TOPIC_PREFIX", "http2mqtt/")
+MQTT_CLIENT_ID       = os.environ.get("MQTT_CLIENT_ID", "http2mqtt")
+MQTT_USERNAME        = os.environ.get("MQTT_USERNAME")
+MQTT_PASSWORD        = os.environ.get("MQTT_PASSWORD")
+MQTT_RETAIN          = bool(int(os.environ.get("MQTT_RETAIN", "1")))
+MQTT_QOS             = int(os.environ.get("MQTT_QOS", "1"))
+MQTT_PROTOCOL        = os.environ.get("MQTT_PROTOCOL", "3.1.1")
+HTTP_IP_ADDRESS      = os.environ.get("HTTP_IP_ADDRESS", "0.0.0.0")
+HTTP_PORT            = int(os.environ.get("HTTP_PORT", "8080"))
+HTTP_PAYLOAD_HEADER  = os.environ.get("HTTP_PAYLOAD_HEADER", "x-payload")
+API_KEY              = os.environ.get("API_KEY")  # optional; if set, require auth
+
+# Limits (basic sanity guardrails; optional)
+MAX_TOPIC_LEN        = int(os.environ.get("MAX_TOPIC_LEN", "512"))
+MAX_PAYLOAD_LEN      = int(os.environ.get("MAX_PAYLOAD_LEN", "4096"))
 
 # Logging setup
 logging.basicConfig(
@@ -43,7 +47,6 @@ if _proto in ("5", "5.0", "v5", "mqttv5"):
 elif _proto in ("3.1", "3.10", "v3.1", "mqttv31"):
     MQTT_PROTOCOL_CONST = mqtt.MQTTv31
 else:
-    # default to 3.1.1
     MQTT_PROTOCOL_CONST = mqtt.MQTTv311
 
 logger.info("Using MQTT protocol version: %s", MQTT_PROTOCOL_CONST)
@@ -52,6 +55,13 @@ logger.info("Using MQTT protocol version: %s", MQTT_PROTOCOL_CONST)
 mqtt_client = mqtt.Client(client_id=MQTT_CLIENT_ID, protocol=MQTT_PROTOCOL_CONST)
 if MQTT_USERNAME and MQTT_PASSWORD:
     mqtt_client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
+
+# Helpful reconnect backoff for flaky links
+try:
+    mqtt_client.reconnect_delay_set(min_delay=1, max_delay=30)
+except Exception:
+    pass
+
 mqtt_client.connect(MQTT_BROKER, MQTT_PORT)
 mqtt_client.loop_start()
 
@@ -65,6 +75,11 @@ def publish_message(topic: str, payload: str, qos: int = MQTT_QOS, retain: bool 
     """
     Publish a message to MQTT with the configured prefix.
     """
+    if not topic or len(topic) > MAX_TOPIC_LEN:
+        raise ValueError(f"Topic invalid/too long (max {MAX_TOPIC_LEN})")
+    if payload is None or len(str(payload)) > MAX_PAYLOAD_LEN:
+        raise ValueError(f"Payload missing/too long (max {MAX_PAYLOAD_LEN})")
+
     full_topic = f"{TOPIC_PREFIX}{topic.lstrip('/')}"
     result = mqtt_client.publish(full_topic, payload, qos=qos, retain=retain)
     if result.rc == mqtt.MQTT_ERR_SUCCESS:
@@ -85,7 +100,8 @@ def coerce_int(val: Any, default: int) -> int:
     except (TypeError, ValueError):
         return default
 
-def make_msg_response(topic: str, payload: str, qos: int, retain: bool, msg_id: Optional[str] = None, success: bool = True) -> Dict[str, Any]:
+def make_msg_response(topic: str, payload: str, qos: int, retain: bool,
+                      msg_id: Optional[str] = None, success: bool = True) -> Dict[str, Any]:
     return {
         "id": msg_id or "",
         "topic": TOPIC_PREFIX + topic.lstrip("/"),
@@ -95,19 +111,34 @@ def make_msg_response(topic: str, payload: str, qos: int, retain: bool, msg_id: 
         "result": {"success": bool(success)},
     }
 
-def require_api_key(handler: "HTTPHandler") -> bool:
+def require_api_key(handler: "HTTPHandler", qs: Optional[Dict[str, Any]] = None) -> bool:
     """
-    If API_KEY is set, require X-API-Key header to match.
+    Enforce API key when configured.
+    - Preferred: header X-API-Key
+    - Legacy GET fallback: query param 'apikey' (only for GET /v1/messages)
     """
     if not API_KEY:
         return True
+
     provided = handler.headers.get("X-API-Key")
+
+    # Fallback only for GET and only via query string (legacy devices)
+    if not provided and handler.command == "GET" and isinstance(qs, dict):
+        provided = qs.get("apikey")
+
     if provided == API_KEY:
         return True
-    handler._set_error(401, "Unauthorized", as_json=True)
+
+    wants_json = True
+    try:
+        wants_json = handler._wants_json(qs or {})
+    except Exception:
+        pass
+
+    handler._set_error(401, "Unauthorized", as_json=wants_json)
     return False
 
-def parse_json_or_form(handler: "HTTPHandler", raw_body: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+def parse_json_or_form(handler: "HTTPHandler", raw_body: str):
     """
     Parse body as JSON or form; returns (data, how) where how in {"json","form"}.
     """
@@ -126,6 +157,12 @@ def parse_json_or_form(handler: "HTTPHandler", raw_body: str) -> Tuple[Optional[
         handler._set_error(415, f"Unsupported Content-Type: {ctype}", as_json=True)
         return None, None
 
+def _html_escape(s: Any) -> str:
+    return (str(s)
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;"))
+
 def render_page(status: Optional[Dict[str, Any]] = None) -> bytes:
     """
     Return the HTML for the main page, optionally with a status banner.
@@ -135,11 +172,10 @@ def render_page(status: Optional[Dict[str, Any]] = None) -> bytes:
     banner = ""
     if status is not None:
         cls = "ok" if status.get("ok") else "err"
-        title = status.get("title", "")
+        title = _html_escape(status.get("title", ""))
         details = status.get("details", {})
         items = "".join(
-            f"<li><strong>{urllib.parse.quote_plus(str(k))}:</strong> "
-            f"<code>{(str(v)).replace('<','&lt;').replace('>','&gt;')}</code></li>"
+            f"<li><strong>{_html_escape(k)}:</strong> <code>{_html_escape(v)}</code></li>"
             for k, v in details.items()
         )
         banner = f"""
@@ -170,13 +206,14 @@ def render_page(status: Optional[Dict[str, Any]] = None) -> bytes:
     .banner-title {{ font-weight: 700; margin-bottom: 6px; }}
     .details {{ margin: 0; padding-left: 18px; }}
     .footer {{ margin-top: 12px; text-align: center; font-size:.9em; color:#666; }}
-    code {{ background:#f6f6f6; padding:2px 5px; border-radius:6px; }}
+    code {{ background:#f6f6f6; padding:2px 5px; border-radius:6px; white-space: nowrap; }}
+    pre code {{ white-space: pre; }}
   </style>
 </head>
 <body>
   <div class="container">
     <h1>HTTP → MQTT Bridge</h1>
-    <p class="info">Topic Prefix: <code>{TOPIC_PREFIX}</code></p>
+    <p class="info">Topic Prefix: <code>{_html_escape(TOPIC_PREFIX)}</code></p>
     {banner}
     <form method="post" action="/publish">
       <label>Topic:<input type="text" name="topic" placeholder="e.g. home/sensor/temp" required></label>
@@ -186,24 +223,39 @@ def render_page(status: Optional[Dict[str, Any]] = None) -> bytes:
       <button type="submit">Publish</button>
     </form>
     <div class="footer">
-      Legacy GET is supported for old devices: <code>/v1/messages?topic=...&amp;payload=...&amp;qos=0..2&amp;retain=0|1</code>
+      Legacy GET is supported for old devices:
+      <code>/v1/messages?topic=...&amp;payload=...&amp;qos=0..2&amp;retain=0|1</code>
     </div>
   </div>
 </body>
 </html>"""
     return html.encode("utf-8")
 
+SECURE_DEFAULT_HEADERS = {
+    # Basic security hygiene for a simple app
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    "X-Frame-Options": "DENY",
+    # Minimal CSP: allow inline styles (since CSS is inline here); no scripts
+    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; form-action 'self'",
+}
+
 # =========================
 # HTTP server
 # =========================
 class HTTPHandler(http.server.BaseHTTPRequestHandler):
+    server_version = "http2mqtt/1.0"
+    sys_version = ""  # don’t leak Python version
+
     # --- utility responses ---
     def _set_response(self, status: int = 200, headers: Optional[Dict[str, str]] = None, body: bytes = b""):
         self.send_response(status)
-        headers = headers or {}
-        for k, v in headers.items():
+        hdrs = dict(SECURE_DEFAULT_HEADERS)
+        if headers:
+            hdrs.update(headers)
+        for k, v in hdrs.items():
             self.send_header(k, v)
-        if "Content-Length" not in headers:
+        if "Content-Length" not in hdrs:
             self.send_header("Content-Length", str(len(body)))
         try:
             self.end_headers()
@@ -218,7 +270,7 @@ class HTTPHandler(http.server.BaseHTTPRequestHandler):
     def _set_error(self, status: int, message: str, as_json: bool = False):
         if as_json:
             payload = json.dumps({"error": message}).encode("utf-8")
-            self._set_response(status, {"Content-Type": "application/json"}, payload)
+            self._set_response(status, {"Content-Type": "application/json; charset=utf-8"}, payload)
         else:
             body = render_page({"ok": False, "title": f"Error {status}", "details": {"message": message}})
             self._set_response(status, {"Content-Type": "text/html; charset=utf-8"}, body)
@@ -238,7 +290,6 @@ class HTTPHandler(http.server.BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(path)
         q = parsed.query.replace("?", "&")
         qs = urllib.parse.parse_qs(q, keep_blank_values=True)
-        # Flatten to simple dict[str, str] (take first value)
         flat = {k: (v[0] if isinstance(v, list) and v else "") for k, v in qs.items()}
         return parsed, flat
 
@@ -254,13 +305,15 @@ class HTTPHandler(http.server.BaseHTTPRequestHandler):
 
         # Health
         if path == "/v1/health":
-            self._set_response(200, {"Content-Type": "application/json"}, json.dumps({"status": "ok"}).encode("utf-8"))
+            self._set_response(200, {"Content-Type": "application/json; charset=utf-8"},
+                               json.dumps({"status": "ok"}).encode("utf-8"))
             return
 
         # Config
         if path == "/v1/config":
             cfg = {"topic_prefix": TOPIC_PREFIX, "qos_default": MQTT_QOS, "retain_default": MQTT_RETAIN}
-            self._set_response(200, {"Content-Type": "application/json"}, json.dumps(cfg).encode("utf-8"))
+            self._set_response(200, {"Content-Type": "application/json; charset=utf-8"},
+                               json.dumps(cfg).encode("utf-8"))
             return
 
         # Favicon
@@ -270,7 +323,7 @@ class HTTPHandler(http.server.BaseHTTPRequestHandler):
 
         # Legacy GET publish (for old SIP phones)
         if path == "/v1/messages" and "topic" in qs and "payload" in qs:
-            if not require_api_key(self):
+            if not require_api_key(self, qs):
                 return
             topic   = (qs.get("topic") or "").strip()
             payload = qs.get("payload")
@@ -285,7 +338,8 @@ class HTTPHandler(http.server.BaseHTTPRequestHandler):
                 publish_message(topic, str(payload), qos, retain)
                 response = make_msg_response(topic, str(payload), qos, retain, success=True)
                 if self._wants_json(qs):
-                    self._set_response(200, {"Content-Type": "application/json"}, json.dumps(response).encode("utf-8"))
+                    self._set_response(200, {"Content-Type": "application/json; charset=utf-8"},
+                                       json.dumps(response).encode("utf-8"))
                 else:
                     status = {"ok": True, "title": "MQTT publish succeeded (via GET)", "details": response}
                     self._set_response(200, {"Content-Type": "text/html; charset=utf-8"}, render_page(status))
@@ -298,7 +352,8 @@ class HTTPHandler(http.server.BaseHTTPRequestHandler):
 
     # --- POST ---
     def do_POST(self):
-        if not require_api_key(self):
+        # For POST, header auth only (no query fallback)
+        if not require_api_key(self, None):
             return
 
         length = int(self.headers.get("Content-Length", 0))
@@ -311,7 +366,8 @@ class HTTPHandler(http.server.BaseHTTPRequestHandler):
         idem_key = self.headers.get("Idempotency-Key")
         if idem_key and idem_key in _IDEMP_STORE:
             prior = _IDEMP_STORE[idem_key]
-            self._set_response(201, {"Content-Type": "application/json"}, json.dumps(prior).encode("utf-8"))
+            self._set_response(201, {"Content-Type": "application/json; charset=utf-8"},
+                               json.dumps(prior).encode("utf-8"))
             return
 
         data, how = parse_json_or_form(self, raw)
@@ -340,7 +396,8 @@ class HTTPHandler(http.server.BaseHTTPRequestHandler):
                 result = make_msg_response(topic, str(payload), qos, retain, msg_id=msg_id, success=True)
                 if idem_key:
                     _IDEMP_STORE[idem_key] = result
-                self._set_response(201, {"Content-Type": "application/json"}, json.dumps(result).encode("utf-8"))
+                self._set_response(201, {"Content-Type": "application/json; charset=utf-8"},
+                                   json.dumps(result).encode("utf-8"))
             except Exception as e:
                 self._set_error(500, str(e), as_json=True)
             return
@@ -365,7 +422,8 @@ class HTTPHandler(http.server.BaseHTTPRequestHandler):
                 result = make_msg_response(topic, str(payload), qos, retain, msg_id=msg_id, success=True)
                 if idem_key:
                     _IDEMP_STORE[idem_key] = result
-                self._set_response(201, {"Content-Type": "application/json"}, json.dumps(result).encode("utf-8"))
+                self._set_response(201, {"Content-Type": "application/json; charset=utf-8"},
+                                   json.dumps(result).encode("utf-8"))
             except Exception as e:
                 self._set_error(500, str(e), as_json=True)
             return
@@ -386,7 +444,8 @@ class HTTPHandler(http.server.BaseHTTPRequestHandler):
                 return
             try:
                 publish_message(topic, str(payload), qos, retain)
-                status = {"ok": True, "title": "MQTT publish succeeded", "details": make_msg_response(topic, str(payload), qos, retain)}
+                status = {"ok": True, "title": "MQTT publish succeeded",
+                          "details": make_msg_response(topic, str(payload), qos, retain)}
                 self._set_response(200, {"Content-Type": "text/html; charset=utf-8"}, render_page(status))
             except Exception as e:
                 self._set_response(500, {"Content-Type": "text/html; charset=utf-8"},
