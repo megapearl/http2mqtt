@@ -1,17 +1,21 @@
 # HTTP → MQTT Bridge
 
-A lightweight bridge that exposes an HTTP interface to publish messages to an MQTT broker. Suitable for IoT integrations, webhooks, or simple testing.
+A lightweight bridge that exposes a REST-style HTTP API (with legacy GET support) to publish messages to an MQTT broker.  
+Perfect for IoT integrations, webhooks, SIP phones, or simple testing.
 
 ---
 
 ## 🚀 Features
 
-- **HTTP GET/POST** endpoints for publishing MQTT messages
+- **REST API** for clean integrations (`/v1/messages`, `/v1/topics/{topic}/messages`)
+- **Legacy GET fallback** for devices that cannot send POST (e.g. SIP phones)
+- **HTML Web UI** at `/` with a simple publish form and live feedback
 - **Configurable** via environment variables
 - **Persistent MQTT client** for performance
 - **Threaded HTTP server** for concurrent requests
-- **Docker-ready** with optimized multi-stage build
-- **Health checks** and structured logging
+- **Health & config endpoints** for monitoring
+- **Optional API key & idempotency support**
+- **Docker-ready** with multi-stage build
 
 ---
 
@@ -20,26 +24,18 @@ A lightweight bridge that exposes an HTTP interface to publish messages to an MQ
 ### Prerequisites
 
 - Python **3.8+**
+- MQTT broker accessible on your network
 - Docker & Docker Compose (optional)
 
 ### From Source
 
-1. **Clone** this repo:
-   ```bash
-   git clone https://github.com/megapearl/http2mqtt.git
-   cd http2mqtt
-   ```
-
-2. **Install dependencies**:
-   ```bash
-   pip install --upgrade pip
-   pip install -r requirements.txt
-   ```
-
-3. **Run**:
-   ```bash
-   python http2mqtt.py
-   ```
+```bash
+git clone https://github.com/megapearl/http2mqtt.git
+cd http2mqtt
+pip install --upgrade pip
+pip install -r requirements.txt
+python http2mqtt.py
+```
 
 ---
 
@@ -64,7 +60,6 @@ docker run -d \
 ### Docker Compose
 
 ```bash
-# Start services
 docker-compose up -d
 # Stop
 docker-compose down
@@ -76,59 +71,107 @@ Service is then available on `http://localhost:8080/`.
 
 ## ⚙️ Configuration
 
-| Variable            | Default            | Description                           |
-|---------------------|--------------------|---------------------------------------|
-| `MQTT_BROKER`       | `localhost`        | MQTT broker host or IP               |
-| `MQTT_PORT`         | `1883`             | MQTT broker port                     |
-| `TOPIC_PREFIX`      | `http2mqtt/`       | MQTT topic prefix                    |
-| `MQTT_CLIENT_ID`    | `http2mqtt`        | MQTT client identifier               |
-| `MQTT_USERNAME`     |                    | MQTT auth username (if required)     |
-| `MQTT_PASSWORD`     |                    | MQTT auth password (if required)     |
-| `MQTT_RETAIN`       | `1`                | Default retain flag (0 or 1)         |
-| `MQTT_QOS`          | `1`                | Default QoS level (0, 1, or 2)       |
-| `MQTT_PROTOCOL`     | `5`                | Default Protocol (defaults to 3.1.1  |
-| `HTTP_IP_ADDRESS`   | `0.0.0.0`          | HTTP server bind address             |
-| `HTTP_PORT`         | `8080`             | HTTP server port                     |
-| `HTTP_PAYLOAD_HEADER` | `x-payload`      | Header name to override payload      |
+| Variable              | Default         | Description                               |
+|-----------------------|-----------------|-------------------------------------------|
+| `MQTT_BROKER`         | `localhost`     | MQTT broker host or IP                     |
+| `MQTT_PORT`           | `1883`          | MQTT broker port                           |
+| `TOPIC_PREFIX`        | `http2mqtt/`    | MQTT topic prefix                          |
+| `MQTT_CLIENT_ID`      | `http2mqtt`     | MQTT client identifier                     |
+| `MQTT_USERNAME`       | *(empty)*       | MQTT auth username (if required)           |
+| `MQTT_PASSWORD`       | *(empty)*       | MQTT auth password (if required)           |
+| `MQTT_RETAIN`         | `1`             | Default retain flag (0 or 1)               |
+| `MQTT_QOS`            | `1`             | Default QoS level (0, 1, or 2)             |
+| `MQTT_PROTOCOL`       | `3.1.1`         | MQTT protocol version (`3.1.1` or `5`)     |
+| `HTTP_IP_ADDRESS`     | `0.0.0.0`       | HTTP server bind address                   |
+| `HTTP_PORT`           | `8080`          | HTTP server port                           |
+| `HTTP_PAYLOAD_HEADER` | `x-payload`     | Header name to override payload            |
+| `API_KEY`             | *(empty)*       | Optional API key for auth (`X-API-Key`)    |
 
 ---
 
 ## 📝 Usage
 
-- **Publish via GET**:
-  ```text
-  GET /my/topic?payload=hello
-  Header: x-payload: world   # optional override
-  ```
-- **Publish via POST**:
-  ```text
-  POST /publish
-  Content-Type: application/x-www-form-urlencoded
-  Body: topic=my/topic&payload=hello&qos=2&retain=1
-  ```
+### 1. REST API
 
-The service responds with JSON:
+#### Publish message (generic)
+```bash
+POST /v1/messages
+Content-Type: application/json
 
-```json
 {
-  "topic": "http2mqtt/my/topic",
-  "payload": "hello",
-  "qos": 2,
-  "retain": true,
-  "result": { "success": true }
+  "topic": "frontdoor-voip",
+  "payload": "ip_changed",
+  "qos": 1,
+  "retain": false
 }
+```
+
+#### Publish to specific topic
+```bash
+POST /v1/topics/frontdoor-voip/messages
+Content-Type: application/json
+
+{
+  "payload": "ip_changed",
+  "qos": 1,
+  "retain": 0
+}
+```
+
+#### Health check
+```bash
+GET /v1/health
+# → {"status":"ok"}
+```
+
+#### Config
+```bash
+GET /v1/config
+# → {"topic_prefix":"http2mqtt/","qos_default":1,"retain_default":true}
 ```
 
 ---
 
-## 🔍 Health Check
+### 2. Legacy GET (for SIP phones or limited clients)
 
-- **Endpoint**: `GET /` serves a simple form and returns HTTP 200.
+```text
+GET /v1/messages?topic=frontdoor-voip&payload=ip_changed&qos=1&retain=0
+```
 
-- **Docker Compose**: `healthcheck` command is defined to use `wget --spider`.
+---
+
+### 3. Web UI
+
+Open in browser:
+
+```
+http://localhost:8080/
+```
+
+You get a simple form to publish MQTT messages and see success/failure in-page.
+
+---
+
+## 🔑 Optional Features
+
+- **API Key**  
+  If `API_KEY` is set, all requests must send `X-API-Key: <value>`.
+
+- **Idempotency**  
+  Add header `Idempotency-Key: <uuid>` to `POST /v1/messages` to avoid duplicate publishes.
+
+- **Payload override via header**  
+  You can override the payload with the `x-payload` header:
+  ```bash
+  curl -X POST http://localhost:8080/v1/messages \
+    -H 'Content-Type: application/x-www-form-urlencoded' \
+    -H 'x-payload: my_payload' \
+    -d 'topic=test/topic'
+  ```
 
 ---
 
 ## 📜 License
 
-This project is licensed under the [MIT License](LICENSE). Feel free to use and adapt it!
+This project is licensed under the [MIT License](LICENSE).  
+Feel free to use and adapt it for your own projects!
