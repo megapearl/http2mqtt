@@ -10,6 +10,11 @@ import socketserver
 from typing import Tuple, Dict, Any, Optional
 
 import paho.mqtt.client as mqtt
+try:
+    # Paho ≥ 2.0
+    from paho.mqtt.client import CallbackAPIVersion  # noqa: F401
+except Exception:
+    CallbackAPIVersion = None  # Paho < 2.0 fallback
 
 # =========================
 # Configuration (env vars)
@@ -52,7 +57,15 @@ else:
 logger.info("Using MQTT protocol version: %s", MQTT_PROTOCOL_CONST)
 
 # Initialize persistent MQTT client
-mqtt_client = mqtt.Client(client_id=MQTT_CLIENT_ID, protocol=MQTT_PROTOCOL_CONST)
+if CallbackAPIVersion is not None:  # Paho ≥ 2.0
+    mqtt_client = mqtt.Client(
+        client_id=MQTT_CLIENT_ID,
+        protocol=MQTT_PROTOCOL_CONST,
+        callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
+    )
+else:  # Paho < 2.0
+    mqtt_client = mqtt.Client(client_id=MQTT_CLIENT_ID, protocol=MQTT_PROTOCOL_CONST)
+
 if MQTT_USERNAME and MQTT_PASSWORD:
     mqtt_client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
 
